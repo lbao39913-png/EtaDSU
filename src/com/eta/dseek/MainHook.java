@@ -45,7 +45,10 @@ public class MainHook implements IXposedHookLoadPackage {
                         forceTrue(c, obj, "e");
                         forceTrue(c, obj, "f");
                         injectPrefix(c, obj, "g");
-                        XposedBridge.log(TAG + "patched " + c.getSimpleName());
+                        XposedBridge.log(TAG + "patched " + c.getSimpleName()
+                                + " e=" + readBool(c, obj, "e")
+                                + " f=" + readBool(c, obj, "f")
+                                + " promptLen=" + readPromptLen(c, obj, "g"));
                     } catch (Throwable t) {
                         XposedBridge.log(TAG + "after failed " + t);
                     }
@@ -100,5 +103,26 @@ public class MainHook implements IXposedHookLoadPackage {
             mod.setAccessible(true);
             mod.setInt(f, mod.getInt(f) & ~0x10);
         } catch (Throwable t) { /* ignore */ }
+    }
+
+    private static boolean readBool(Class<?> c, Object obj, String name) {
+        try {
+            Field f = c.getDeclaredField(name);
+            f.setAccessible(true);
+            return f.getBoolean(obj);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static int readPromptLen(Class<?> c, Object obj, String name) {
+        try {
+            Field f = c.getDeclaredField(name);
+            f.setAccessible(true);
+            Object v = f.get(obj);
+            return v instanceof String ? ((String) v).length() : -1;
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 }
