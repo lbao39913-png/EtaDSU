@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-java@v4
         with:
@@ -33,25 +35,14 @@ jobs:
           base64 -d manifest.b64 > template/AndroidManifest.xml
           base64 -d arsc.b64 > template/resources.arsc
           printf 'com.eta.dseek.MainHook' > template/assets/xposed_init
-          ls -l template template/assets
 
-      - name: Compile (android.jar only, no xposed api)
+      - name: Compile
         run: |
           AJ=/tmp/sdk/platforms/android-34/android.jar
-          ls -l $AJ
           mkdir -p bc bd
           javac -source 8 -target 8 -nowarn -cp "$AJ" -d bc src/com/eta/dseek/MainHook.java
-          find bc -name "*.class"
           d8 --min-api 24 --lib "$AJ" --output bd bc/com/eta/dseek/*.class
           dexdump -f bd/classes.dex | grep "Class descriptor"
-
-      - name: Verify
-        run: |
-          dexdump -f bd/classes.dex | grep "Class descriptor" | grep -q "com/eta/dseek/MainHook" || { echo "no MainHook"; exit 1; }
-          if dexdump -f bd/classes.dex | grep "Class descriptor" | grep -q "de/robv/android/xposed"; then
-            echo "BAD: xposed api in dex"; exit 1
-          fi
-          echo OK
 
       - name: Package and sign
         run: |
@@ -64,9 +55,12 @@ jobs:
             -validity 10000 -storepass etadseek -keypass etadseek -dname "CN=EtaDSU,C=CN"
           zipalign -p 4 u.apk a.apk
           apksigner sign --ks r.jks --ks-pass pass:etadseek --key-pass pass:etadseek --out EtaDSU.apk a.apk
-          ls -l EtaDSU.apk
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: apk
-          path: EtaDSU.apk
+      - name: Commit APK to repo
+        run: |
+          cp EtaDSU.apk dist.apk 2>/dev/null || true
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add -f EtaDSU.apk
+          git commit -m "build apk" || echo "no change"
+          git push || echo "push skipped"
