@@ -1,4 +1,4 @@
-name: Build LSPosed Module
+name: Build
 
 on:
   push:
@@ -16,58 +16,59 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android cmdline-tools
+      - name: Install build-tools
         run: |
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip -d android-sdk
-          mkdir -p android-sdk/latest
-          mv android-sdk/cmdline-tools/* android-sdk/latest/ 2>/dev/null || true
-          mkdir -p android-sdk/cmdline-tools
-          mv android-sdk/latest android-sdk/cmdline-tools/latest
-          yes | android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
-          android-sdk/cmdline-tools/latest/bin/sdkmanager --install "build-tools;34.0.0" >/dev/null
-          echo "$PWD/android-sdk/build-tools/34.0.0" >> $GITHUB_PATH
+          unzip -q commandlinetools-linux-11076708_latest.zip -d sdk
+          mkdir -p sdk/cmdline-tools
+          mv sdk/cmdline-tools sdk/tmp && mkdir -p sdk/cmdline-tools && mv sdk/tmp sdk/cmdline-tools/latest
+          yes | sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+          sdk/cmdline-tools/latest/bin/sdkmanager --install "build-tools;34.0.0" >/dev/null
+          echo "/tmp/sdk/build-tools/34.0.0" >> $GITHUB_PATH
 
-      - name: Restore templates
+      - name: Get smali + templates
         run: |
+          wget -q -O /tmp/smali.jar https://repo1.maven.org/maven2/org/smali/smali/2.5.2/smali-2.5.2.jar
+          wget -q -O /tmp/dexlib2.jar https://repo1.maven.org/maven2/org/smali/dexlib2/2.5.2/dexlib2-2.5.2.jar
+          wget -q -O /tmp/guava.jar https://repo1.maven.org/maven2/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar
+          wget -q -O /tmp/jcommander.jar https://repo1.maven.org/maven2/com/beust/jcommander/1.78/jcommander-1.78.jar
+          wget -q -O /tmp/antlr.jar https://repo1.maven.org/maven2/org/antlr/antlr-runtime/3.5.2/antlr-runtime-3.5.2.jar
           mkdir -p template/assets
           base64 -d manifest.b64 > template/AndroidManifest.xml
           base64 -d arsc.b64 > template/resources.arsc
           printf 'com.eta.dseek.MainHook' > template/assets/xposed_init
-          ls -l template template/assets
 
-      - name: Xposed API
-        run: wget -q -O api82.jar https://api.xposed.info/framework/api-82.jar
-
-      - name: Compile
+      - name: Assemble smali
         run: |
-          mkdir -p bc bd
-          javac -source 8 -target 8 -nowarn -cp api82.jar -d bc src/com/eta/dseek/MainHook.java
-          d8 --min-api 24 --output bd bc/com/eta/dseek/*.class
-          echo "--- class count ---"
-          dexdump -f bd/classes.dex | grep -c "Class descriptor" || true
+          mkdir -p smali-src/com/eta/dseek
+          cp MainHook.smali smali-src/com/eta/dseek/MainHook.smali
+          ls -l smali-src/com/eta/dseek/
 
-      - name: Check dex
+      - name: Compile smali to dex
         run: |
-          if dexdump -f bd/classes.dex | grep "Class descriptor" | grep -q "de/robv/android/xposed"; then
-            echo "ERROR: Xposed API compiled into dex"
-            exit 1
+          CP=/tmp/smali.jar:/tmp/dexlib2.jar:/tmp/guava.jar:/tmp/jcommander.jar:/tmp/antlr.jar
+          java -cp $CP org.jf.smali.Main -o classes.dex smali-src
+          ls -l classes.dex
+          dexdump -f classes.dex | grep "Class descriptor"
+
+      - name: Check
+        run: |
+          if dexdump -f classes.dex | grep "Class descriptor" | grep -q "de/robv/android/xposed"; then
+            echo "BAD: xposed api inside dex"; exit 1
           fi
-          echo "OK clean"
 
       - name: Package
         run: |
           mkdir -p ap
           cp -r template/. ap/
-          cp bd/classes.dex ap/
+          cp classes.dex ap/
           cd ap && zip -qr ../u.apk .
 
       - name: Sign
         run: |
           keytool -genkeypair -keystore r.jks -alias e -keyalg RSA -keysize 2048 \
-            -validity 10000 -storepass etadseek -keypass etadseek \
-            -dname "CN=EtaDSU,C=CN"
+            -validity 10000 -storepass etadseek -keypass etadseek -dname "CN=EtaDSU,C=CN"
           zipalign -p 4 u.apk a.apk
           apksigner sign --ks r.jks --ks-pass pass:etadseek --key-pass pass:etadseek --out EtaDSU.apk a.apk
           ls -l EtaDSU.apk
