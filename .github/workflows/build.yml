@@ -27,46 +27,49 @@ jobs:
           sdk/cmdline-tools/latest/bin/sdkmanager --install "build-tools;34.0.0" >/dev/null
           echo "/tmp/sdk/build-tools/34.0.0" >> $GITHUB_PATH
 
-      - name: Get smali + templates
+      - name: Get tools and templates
         run: |
-          wget -q -O /tmp/smali.jar https://repo1.maven.org/maven2/org/smali/smali/2.5.2/smali-2.5.2.jar
-          wget -q -O /tmp/dexlib2.jar https://repo1.maven.org/maven2/org/smali/dexlib2/2.5.2/dexlib2-2.5.2.jar
-          wget -q -O /tmp/guava.jar https://repo1.maven.org/maven2/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar
-          wget -q -O /tmp/jcommander.jar https://repo1.maven.org/maven2/com/beust/jcommander/1.78/jcommander-1.78.jar
-          wget -q -O /tmp/antlr.jar https://repo1.maven.org/maven2/org/antlr/antlr-runtime/3.5.2/antlr-runtime-3.5.2.jar
+          M=https://repo1.maven.org/maven2
+          wget -q -O /tmp/smali.jar    $M/org/smali/smali/2.5.2/smali-2.5.2.jar
+          wget -q -O /tmp/dexlib2.jar  $M/org/smali/dexlib2/2.5.2/dexlib2-2.5.2.jar
+          wget -q -O /tmp/guava.jar    $M/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar
+          wget -q -O /tmp/jcmd.jar     $M/com/beust/jcommander/1.78/jcommander-1.78.jar
+          wget -q -O /tmp/antlr.jar    $M/org/antlr/antlr-runtime/3.5.2/antlr-runtime-3.5.2.jar
+          wget -q -O /tmp/kotlin.jar   $M/org/jetbrains/kotlin/kotlin-stdlib/1.6.10/kotlin-stdlib-1.6.10.jar
           mkdir -p template/assets
           base64 -d manifest.b64 > template/AndroidManifest.xml
           base64 -d arsc.b64 > template/resources.arsc
           printf 'com.eta.dseek.MainHook' > template/assets/xposed_init
+          ls -l /tmp/*.jar
 
-      - name: Assemble smali
+      - name: Prepare smali tree
         run: |
-          mkdir -p smali-src/com/eta/dseek
-          cp MainHook.smali smali-src/com/eta/dseek/MainHook.smali
-          ls -l smali-src/com/eta/dseek/
+          mkdir -p sm/com/eta/dseek
+          cp MainHook.smali sm/com/eta/dseek/MainHook.smali
+          find sm -type f
 
-      - name: Compile smali to dex
+      - name: Compile smali
         run: |
-          CP=/tmp/smali.jar:/tmp/dexlib2.jar:/tmp/guava.jar:/tmp/jcommander.jar:/tmp/antlr.jar
-          java -cp $CP org.jf.smali.Main -o classes.dex smali-src
+          CP=/tmp/smali.jar:/tmp/dexlib2.jar:/tmp/guava.jar:/tmp/jcmd.jar:/tmp/antlr.jar:/tmp/kotlin.jar
+          java -cp "$CP" org.jf.smali.Main -o classes.dex sm 2>&1 | head -40
           ls -l classes.dex
           dexdump -f classes.dex | grep "Class descriptor"
 
-      - name: Check
+      - name: Verify
         run: |
+          dexdump -f classes.dex | grep "Class descriptor" | grep -q "com/eta/dseek/MainHook" || { echo "no MainHook"; exit 1; }
           if dexdump -f classes.dex | grep "Class descriptor" | grep -q "de/robv/android/xposed"; then
-            echo "BAD: xposed api inside dex"; exit 1
+            echo "BAD: xposed api in dex"; exit 1
           fi
+          echo OK
 
-      - name: Package
+      - name: Package and sign
         run: |
           mkdir -p ap
           cp -r template/. ap/
           cp classes.dex ap/
           cd ap && zip -qr ../u.apk .
-
-      - name: Sign
-        run: |
+          cd ..
           keytool -genkeypair -keystore r.jks -alias e -keyalg RSA -keysize 2048 \
             -validity 10000 -storepass etadseek -keypass etadseek -dname "CN=EtaDSU,C=CN"
           zipalign -p 4 u.apk a.apk
