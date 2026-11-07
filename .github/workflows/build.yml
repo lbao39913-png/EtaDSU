@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - uses: actions/setup-java@v4
         with:
@@ -39,13 +37,34 @@ jobs:
           base64 -d arsc.b64 > template/resources.arsc
           printf 'com.eta.dseek.MainHook' > template/assets/xposed_init
 
-      - name: Compile
+      - name: Build stub api
+        run: |
+          AJ=/tmp/sdk/platforms/android-34/android.jar
+          mkdir -p stub-classes
+          javac -source 8 -target 8 -nowarn -cp "$AJ" -d stub-classes \
+            $(find api-stub -name "*.java")
+          cd stub-classes && jar cf ../api-stub.jar . && cd ..
+          ls -l api-stub.jar
+
+      - name: Compile module
         run: |
           AJ=/tmp/sdk/platforms/android-34/android.jar
           mkdir -p bc bd
-          javac -source 8 -target 8 -nowarn -cp "$AJ" -d bc src/com/eta/dseek/MainHook.java
-          d8 --min-api 24 --lib "$AJ" --output bd bc/com/eta/dseek/*.class
+          javac -source 8 -target 8 -nowarn -cp "$AJ:api-stub.jar" -d bc \
+            src/com/eta/dseek/MainHook.java
+          find bc -name "*.class"
+          d8 --min-api 24 --lib "$AJ" --classpath api-stub.jar --output bd \
+            bc/com/eta/dseek/*.class
+          echo "--- classes in dex ---"
           dexdump -f bd/classes.dex | grep "Class descriptor"
+
+      - name: Verify
+        run: |
+          dexdump -f bd/classes.dex | grep "Class descriptor" | grep -q "com/eta/dseek/MainHook" || { echo "no MainHook"; exit 1; }
+          if dexdump -f bd/classes.dex | grep "Class descriptor" | grep -q "de/robv/android/xposed"; then
+            echo "BAD: xposed classes inside dex"; exit 1
+          fi
+          echo OK
 
       - name: Package and sign
         run: |
@@ -58,12 +77,11 @@ jobs:
             -validity 10000 -storepass etadseek -keypass etadseek -dname "CN=EtaDSU,C=CN"
           zipalign -p 4 u.apk a.apk
           apksigner sign --ks r.jks --ks-pass pass:etadseek --key-pass pass:etadseek --out EtaDSU.apk a.apk
-          ls -l EtaDSU.apk
 
       - name: Commit APK
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f EtaDSU.apk
-          git commit -m "build: apk $(date +%s)" || true
+          git commit -m "build: apk" || true
           git push origin main || true
